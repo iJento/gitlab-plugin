@@ -15,7 +15,7 @@
     <f:entry title="Add note with build status on merge requests" field="addNoteOnMergeRequest">
       <f:checkbox default="true" />
     </f:entry>
-        <f:entry title="All allow all branches (Ignoring Filtered Branches)" field="allowAllBranches">
+        <f:entry title="Allow all branches (Ignoring Filtered Branches)" field="allowAllBranches">
       <f:checkbox default="false" />
     </f:entry>
     <f:entry title="Filter branches" help="/plugin/gitlab-plugin/help/help-allowedBranches.html">
@@ -23,8 +23,17 @@
     	<j:set var="optionsSize" value="${projectBranches.size()}"/>
    		<select name="allowedBranches" multiple="multiple" size="${optionsSize}" style="min-width:50%;">   		
 			<j:forEach var="aBranch" items="${projectBranches}" varStatus="loop">
-				<f:option value="${aBranch}" selected="${instance.allowedBranches.isEmpty() || instance.allowedBranches.contains(aBranch)}">${aBranch}</f:option>				
+				<f:option value="${aBranch}" selected="${instance.allowedBranches.isEmpty() || instance.allowedBranches.contains(aBranch) || instance.allowAllBranches}">${aBranch}</f:option>
 			</j:forEach>
    		</select>
-	</f:entry> 
+</f:entry>
+   <f:optionalBlock name="filterRequests"
+                    title="Filter push requests containing certain message content" inline="true"
+                    checked="${instance.filterRequests}">
+      <f:entry title="Strings to filter" field="commitMessageFilterStrings">
+         <f:expandableTextbox/>
+      </f:entry>
+   </f:optionalBlock>
+
+
 </j:jelly>

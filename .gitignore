@@ -9,3 +9,5 @@ work
 .settings
 /bin/
 /bin
+.idea/
+*.iml

@@ -10,28 +10,32 @@ import java.io.IOException;
  */
 public class GitLabPushCause extends SCMTrigger.SCMTriggerCause {
 
-    private final String pushedBy;
+    private String cause;
+   private String pushedBy;
 
-    public GitLabPushCause(String pushedBy) {
-        this.pushedBy = pushedBy;
+    public GitLabPushCause(String cause) {
+        this.cause = cause;
     }
 
-    public GitLabPushCause(String pushedBy, File logFile) throws IOException {
+    public GitLabPushCause(String cause, File logFile) throws IOException {
         super(logFile);
-        this.pushedBy = pushedBy;
+        this.cause = cause;
     }
 
-    public GitLabPushCause(String pushedBy, String pollingLog) {
+    public GitLabPushCause(String cause, String pollingLog) {
         super(pollingLog);
-        this.pushedBy = pushedBy;
+        this.cause = cause;
     }
 
     @Override
     public String getShortDescription() {
-        if (pushedBy == null) {
+       if(pushedBy != null && cause == null){
+          cause = pushedBy;
+       }
+        if (cause == null) {
             return "Started by GitLab push";
         } else {
-            return String.format("Started by GitLab push by %s", pushedBy);
+            return String.format("Started by GitLab push to %s", cause);
         }
     }
 }

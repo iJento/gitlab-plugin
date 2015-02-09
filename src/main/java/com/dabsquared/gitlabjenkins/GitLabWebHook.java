@@ -77,7 +77,7 @@ public class GitLabWebHook implements UnprotectedRootAction {
     }
 
     public void getDynamic(final String projectName, final StaplerRequest req, StaplerResponse res) {
-        LOGGER.log(Level.WARNING, "WebHook called.");
+        LOGGER.log(Level.WARNING, " WebHook called: "+req.getRestOfPath()+" for project "+projectName);
         final Iterator<String> restOfPathParts = Splitter.on('/').omitEmptyStrings().split(req.getRestOfPath()).iterator();
         final AbstractProject<?, ?>[] projectHolder = new AbstractProject<?, ?>[] { null };
         ACL.impersonate(ACL.SYSTEM, new Runnable() {
@@ -312,9 +312,11 @@ public class GitLabWebHook implements UnprotectedRootAction {
 
         String objectType = json.optString("object_kind");
 
-        if(objectType != null && objectType.equals("merge_request")) {
+       if(objectType != null && objectType.equals("merge_request")) {
+          LOGGER.log(Level.FINE,"Generating merge request build");
             this.generateMergeRequestBuild(data, project, req, rsp);
         } else {
+          LOGGER.log(Level.FINE,"Generating push request build");
             this.generatePushBuild(data, project, req, rsp);
         }
     }
@@ -336,18 +338,23 @@ public class GitLabWebHook implements UnprotectedRootAction {
             if (trigger == null) {
                 return;
             }
-            trigger.onPost(request);
+            boolean buildExists = false;
 
             if (trigger.getTriggerOpenMergeRequestOnPush()) {
             	// Fetch and build open merge requests with the same source branch
-            	buildOpenMergeRequests(trigger, request.getProject_id(), request.getRef());
+            	buildExists = buildOpenMergeRequests(trigger, request.getProject_id(), request.getRef());
             }
+
+           if(!buildExists) {
+              trigger.onPost(request);
+           }
+
         } finally {
             SecurityContextHolder.getContext().setAuthentication(old);
         }
     }
 
-	protected void buildOpenMergeRequests(GitLabPushTrigger trigger, Integer projectId, String projectRef) {
+	protected boolean buildOpenMergeRequests(GitLabPushTrigger trigger, Integer projectId, String projectRef) {
 		try {
 			GitLab api = new GitLab();
 			List<org.gitlab.api.models.GitlabMergeRequest> reqs = api.instance().getMergeRequests(projectId);
@@ -386,7 +393,7 @@ public class GitLabWebHook implements UnprotectedRootAction {
 					} finally {
 						SecurityContextHolder.getContext().setAuthentication(old);
 					}
-					return;
+					return true;
 				}
 			}
 		} catch (Exception e) {
@@ -394,33 +401,53 @@ public class GitLabWebHook implements UnprotectedRootAction {
 					+ e.getMessage());
 			e.printStackTrace();
 		}
+         return false;
 	}
 
     public void generateMergeRequestBuild(String json, AbstractProject project, StaplerRequest req, StaplerResponse rsp) {
+       LOGGER.log(Level.FINE, "Generating MR build request");
         GitLabMergeRequest request = GitLabMergeRequest.create(json);
+       LOGGER.log(Level.FINE, "Checking request state");
+
+       LOGGER.log(Level.INFO, "Checking for closed MR");
         if(request.getObjectAttribute().getState().equals("closed")) {
         	LOGGER.log(Level.INFO, "Closed Merge Request, no build started");
             return;
         }
-        if(request.getObjectAttribute().getState().equals("merged")) {
+       LOGGER.log(Level.INFO, "Checking for accepted MR");
+       if(request.getObjectAttribute().getState().equals("merged")) {
         	LOGGER.log(Level.INFO, "Accepted Merge Request, no build started");
             return;
         }
-        AbstractBuild mergeBuild = getBuildBySHA1(project, request.getObjectAttribute().getLastCommit().getId(), true);
-        if(mergeBuild!=null){
-            LOGGER.log(Level.INFO, "Last commit in Merge Request has already been build in build #"+mergeBuild.getId());
-            return;
-        }
+       LOGGER.log(Level.INFO, "Getting abstract build by SHA1");
+       try {
+          AbstractBuild mergeBuild =
+                getBuildBySHA1(project, request.getObjectAttribute().getLastCommit().getId(), true);
+          LOGGER.log(Level.INFO, "Returned from get build by sha1");
+          if (mergeBuild != null) {
+             LOGGER.log(Level.INFO,
+                        "Last commit in Merge Request has already been build in build #" + mergeBuild.getId());
+             return;
+          }
+       }catch(Exception e){
+          LOGGER.warning("Failed to check for existing build: "+e.getMessage());
+       }
 
+        LOGGER.log(Level.FINE, "Merge request not closed, accepted or already built proceeding with build");
         Authentication old = SecurityContextHolder.getContext().getAuthentication();
+       LOGGER.log(Level.FINE, "Obtained security authentication");
         SecurityContextHolder.getContext().setAuthentication(ACL.SYSTEM);
-        try {
+       LOGGER.log(Level.FINE, "Set security context to ACL.SYSTEM");
+       try {
+           LOGGER.log(Level.INFO,"Project "+project.getDisplayName());
             GitLabPushTrigger trigger = (GitLabPushTrigger) project.getTrigger(GitLabPushTrigger.class);
             if (trigger == null) {
+               LOGGER.log(Level.WARNING,"Project has no trigger");
                 return;
             }
             trigger.onPost(request);
         } finally {
+          LOGGER.log(Level.FINE, "Returning security to old authentication");
             SecurityContextHolder.getContext().setAuthentication(old);
         }
     }
@@ -442,19 +469,27 @@ public class GitLabWebHook implements UnprotectedRootAction {
      */
     private AbstractBuild getBuildBySHA1(AbstractProject project, String commitSHA1, boolean triggeredByMergeRequest) {
         List<AbstractBuild> builds = project.getBuilds();
-        for(AbstractBuild build : builds) {
-            BuildData data = build.getAction(BuildData.class);
-            Build b =  data.lastBuild;
-            MergeRecord merge = build.getAction(MergeRecord.class);
-            boolean isMergeBuild = merge!=null && !merge.getSha1().equals(b.getMarked().getSha1String());
-            if(b!=null && b.getMarked()!=null && b.getMarked().getSha1String().equals(commitSHA1)){
-                if(triggeredByMergeRequest == isMergeBuild){
-                    LOGGER.log(Level.FINE, build.getNumber()+" Build found matching "+commitSHA1+" "+(isMergeBuild? "merge":"normal")+" build");
-                       return build;
+       try {
+          for (AbstractBuild build : builds) {
+             BuildData data = build.getAction(BuildData.class);
+             Build b = data.lastBuild;
+             MergeRecord merge = build.getAction(MergeRecord.class);
+             boolean isMergeBuild = merge != null && !merge.getSha1().equals(b.getMarked().getSha1String());
+             if (b != null && b.getMarked() != null && b.getMarked().getSha1String().equals(commitSHA1)) {
+                if (triggeredByMergeRequest == isMergeBuild) {
+                   LOGGER.log(Level.FINE,
+                              build.getNumber() + " Build found matching " + commitSHA1 + " " + (isMergeBuild ? "merge"
+                                                                                                              : "normal")
+                              + " build");
+                   return build;
                 }
-            }
-        }
-        return null;
+             }
+          }
+       }catch (Exception e){
+          LOGGER.log(Level.WARNING,"Failed to get build due to "+e.getMessage());
+       }
+       LOGGER.log(Level.INFO,"No build found returning null");
+       return null;
     }
 
     /**
